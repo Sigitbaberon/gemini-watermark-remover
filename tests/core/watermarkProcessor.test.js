@@ -1823,6 +1823,77 @@ test('processWatermarkImageData should prefer strong 96px evidence over a weak 4
     assert.equal(result.meta.detection.residualVisibility?.visible, false);
 });
 
+test('processWatermarkImageData should prefer strong bottom-right 48px evidence over weak 48px large-margin catalog evidence', async (t) => {
+    const samplePath = path.resolve('D:/Project/sample-files/gemini-watermark/bug/20260618.png');
+    try {
+        await access(samplePath);
+    } catch {
+        t.skip('external 20260618 bug sample is not available');
+        return;
+    }
+
+    const alpha48 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_48.png')));
+    const alpha96 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96.png')));
+    const alpha96NewMargin = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96_20260520.png')));
+    const imageData = await decodeImageDataInNode(samplePath);
+
+    const result = processWatermarkImageData(imageData, {
+        alpha48,
+        alpha96,
+        alpha96NewMargin,
+        alpha96Variants: {
+            '20260520': alpha96NewMargin
+        },
+        adaptiveMode: 'never',
+        getAlphaMap: (size) => size === 48 ? alpha48 : interpolateAlphaMap(alpha96, 96, size)
+    });
+
+    assert.equal(result.meta.applied, true, `skipReason=${result.meta.skipReason}`);
+    assert.deepEqual(result.meta.config, { logoSize: 48, marginRight: 32, marginBottom: 32 });
+    assert.deepEqual(result.meta.position, { x: 1328, y: 688, width: 48, height: 48 });
+    assert.equal(result.meta.selectionDebug?.usedCatalogVariant, false);
+    assert.ok(
+        result.meta.detection.originalSpatialScore >= 0.45 &&
+            result.meta.detection.originalGradientScore >= 0.2,
+        `expected strong bottom-right evidence, detection=${JSON.stringify(result.meta.detection)}`
+    );
+    assert.equal(
+        result.meta.detection.residualVisibility?.visible,
+        false,
+        `expected no calibrated visible residual, source=${result.meta.source}, detection=${JSON.stringify(result.meta.detection)}`
+    );
+});
+
+test('processWatermarkImageData should keep the 20260618-2 no-target sample skipped', async (t) => {
+    const samplePath = path.resolve('D:/Project/sample-files/gemini-watermark/bug/20260618-2.png');
+    try {
+        await access(samplePath);
+    } catch {
+        t.skip('external 20260618-2 no-target sample is not available');
+        return;
+    }
+
+    const alpha48 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_48.png')));
+    const alpha96 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96.png')));
+    const alpha96NewMargin = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96_20260520.png')));
+    const imageData = await decodeImageDataInNode(samplePath);
+
+    const result = processWatermarkImageData(imageData, {
+        alpha48,
+        alpha96,
+        alpha96NewMargin,
+        alpha96Variants: {
+            '20260520': alpha96NewMargin
+        },
+        adaptiveMode: 'never',
+        getAlphaMap: (size) => size === 48 ? alpha48 : interpolateAlphaMap(alpha96, 96, size)
+    });
+
+    assert.equal(result.meta.applied, false);
+    assert.equal(result.meta.skipReason, 'no-watermark-detected');
+    assert.equal(result.meta.source, 'skipped');
+});
+
 test('processWatermarkImageData should keep a 1024x1024 dark sample on the 48px large-margin anchor', async () => {
     const alpha48 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_48.png')));
     const alpha96 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96.png')));

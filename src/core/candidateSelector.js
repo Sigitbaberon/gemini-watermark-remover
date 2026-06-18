@@ -115,6 +115,14 @@ const STANDARD_STRONG_SIGNAL_NEAR_BLACK_OVERRIDE_MAX_GRADIENT = 0.32;
 const STANDARD_STRONG_SIGNAL_NEAR_BLACK_OVERRIDE_MIN_IMPROVEMENT = 0.7;
 const STANDARD_STRONG_SIGNAL_NEAR_BLACK_OVERRIDE_MIN_GRADIENT_DROP = 0.6;
 const STANDARD_STRONG_SIGNAL_NEAR_BLACK_OVERRIDE_MAX_NEAR_BLACK_INCREASE = 0.4;
+const BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_MIN_SPATIAL = 0.35;
+const BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_MIN_GRADIENT = 0.16;
+const BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_SPATIAL_ADVANTAGE = 0.18;
+const BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_GRADIENT_ADVANTAGE = 0.12;
+const BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_MAX_RESIDUAL_DELTA = 0.08;
+const DARK_POLARITY_CATALOG_MIN_ORIGINAL_SPATIAL = 0.12;
+const DARK_POLARITY_CATALOG_MIN_ORIGINAL_GRADIENT = 0.08;
+const DARK_POLARITY_CATALOG_MAX_TEXTURE_FOR_WEAK_EVIDENCE = 0.25;
 const TEMPLATE_ALIGN_SHIFTS = [-0.5, -0.25, 0, 0.25, 0.5];
 const TEMPLATE_ALIGN_SCALES = [0.99, 1, 1.01];
 const STANDARD_NEARBY_SHIFTS = [-12, -8, -4, 0, 4, 8, 12];
@@ -830,9 +838,16 @@ export function evaluateRestorationCandidate({
         catalogEvidenceGate !== 'medium' ||
         originalScores.spatialScore >= 0.15 ||
         originalScores.gradientScore >= 0.08;
+    const darkPolarityCatalogEvidenceAllowed =
+        provenance?.darkPolarity !== true ||
+        provenance?.catalogVariant !== true ||
+        originalScores.spatialScore >= DARK_POLARITY_CATALOG_MIN_ORIGINAL_SPATIAL ||
+        originalScores.gradientScore >= DARK_POLARITY_CATALOG_MIN_ORIGINAL_GRADIENT ||
+        texturePenalty <= DARK_POLARITY_CATALOG_MAX_TEXTURE_FOR_WEAK_EVIDENCE;
     const accepted =
         originalEvidenceAllowed &&
         catalogEvidenceAllowed &&
+        darkPolarityCatalogEvidenceAllowed &&
         (
             hardRejectAllowed ||
             conservativeCatalogHardRejectAllowed ||
@@ -1065,6 +1080,12 @@ export function pickBetterCandidate(currentBest, candidate, minCostDelta = 0.005
     if (shouldPreserveCatalogOriginalSignal(currentBest, candidate)) {
         return currentBest;
     }
+    if (shouldPreserveDominantBottomRight48AgainstWeakStandard(currentBest, candidate)) {
+        return currentBest;
+    }
+    if (shouldPreserveDominantBottomRight48AgainstWeakStandard(candidate, currentBest)) {
+        return candidate;
+    }
     if (shouldPreserveStrongCanonical96AgainstWeakCurrentLargeMargin(currentBest, candidate)) {
         return currentBest;
     }
@@ -1189,6 +1210,51 @@ function isCurrentLargeMarginCandidate(candidate) {
     return candidate?.config?.logoSize === 48 &&
         candidate.config.marginRight === 96 &&
         candidate.config.marginBottom === 96;
+}
+
+function isBottomRight48Candidate(candidate) {
+    return candidate?.config?.logoSize === 48 &&
+        candidate.config.marginRight === 32 &&
+        candidate.config.marginBottom === 32 &&
+        candidate?.provenance?.localShift !== true &&
+        candidate?.provenance?.sizeJitter !== true &&
+        candidate?.provenance?.previewAnchor !== true;
+}
+
+function isWeakCompetingStandardAnchor(candidate) {
+    return isStandardCandidateSource(candidate) &&
+        candidate?.provenance?.localShift !== true &&
+        candidate?.provenance?.sizeJitter !== true &&
+        candidate?.provenance?.previewAnchor !== true &&
+        !isBottomRight48Candidate(candidate);
+}
+
+function shouldPreserveDominantBottomRight48AgainstWeakStandard(bottomRightCandidate, competingCandidate) {
+    if (!isBottomRight48Candidate(bottomRightCandidate)) return false;
+    if (!isWeakCompetingStandardAnchor(competingCandidate)) return false;
+
+    const bottomSpatial = Number(bottomRightCandidate.originalSpatialScore);
+    const bottomGradient = Number(bottomRightCandidate.originalGradientScore);
+    const largeSpatial = Number(competingCandidate.originalSpatialScore);
+    const largeGradient = Number(competingCandidate.originalGradientScore);
+    const bottomResidual = Number(bottomRightCandidate.residual?.score);
+    const largeResidual = Number(competingCandidate.residual?.score);
+    if (
+        !Number.isFinite(bottomSpatial) ||
+        !Number.isFinite(bottomGradient) ||
+        !Number.isFinite(largeSpatial) ||
+        !Number.isFinite(largeGradient) ||
+        !Number.isFinite(bottomResidual) ||
+        !Number.isFinite(largeResidual)
+    ) {
+        return false;
+    }
+
+    return bottomSpatial >= BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_MIN_SPATIAL &&
+        bottomGradient >= BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_MIN_GRADIENT &&
+        bottomSpatial >= largeSpatial + BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_SPATIAL_ADVANTAGE &&
+        bottomGradient >= largeGradient + BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_GRADIENT_ADVANTAGE &&
+        bottomResidual <= largeResidual + BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_MAX_RESIDUAL_DELTA;
 }
 
 function isPreviewAnchorCandidate(candidate) {
