@@ -396,8 +396,15 @@ function createImageCard(item) {
     card.id = `card-${item.id}`;
     card.className = 'batch-card';
     card.innerHTML = `
-        <div class="batch-thumb">
-            <img id="result-${item.id}" class="batch-image" draggable="false" alt="" />
+        <div class="batch-comparison">
+            <div class="batch-pane original">
+                <span class="batch-pane-label">原图</span>
+                <img id="original-${item.id}" class="batch-image" draggable="false" alt="" />
+            </div>
+            <div class="batch-pane processed">
+                <span class="batch-pane-label">处理后</span>
+                <img id="processed-${item.id}" class="batch-image" draggable="false" alt="" />
+            </div>
         </div>
         <div class="batch-main">
             <h4 class="batch-title"></h4>
@@ -462,8 +469,9 @@ async function processQueue(batchId) {
 
                 item.originalImg = img;
                 item.originalUrl = img.src;
-                const resultImage = document.getElementById(`result-${item.id}`);
-                if (resultImage) resultImage.src = img.src;
+                const originalPreview = document.getElementById(`original-${item.id}`);
+                const processedPreview = document.getElementById(`processed-${item.id}`);
+                if (originalPreview) originalPreview.src = img.src;
 
                 item.status = 'processing';
                 renderImageCardStatus(item);
@@ -474,7 +482,7 @@ async function processQueue(batchId) {
                 item.processedMeta = processed.meta;
                 item.processedBlob = processed.blob;
                 item.processedUrl = URL.createObjectURL(processed.blob);
-                if (resultImage) resultImage.src = item.processedUrl;
+                if (processedPreview) processedPreview.src = item.processedUrl;
 
                 item.status = 'completed';
                 processedCount++;

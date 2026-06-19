@@ -224,25 +224,47 @@ a {
 
 .batch-card {
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(320px, 42%) minmax(0, 1fr) auto;
   gap: 1rem;
   align-items: center;
-  min-height: 112px;
+  min-height: 156px;
   padding: 0.75rem;
   border: 1px solid #e5e7eb;
   border-radius: 0.5rem;
   background: #fff;
 }
 
-.batch-thumb {
+.batch-comparison {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.batch-pane {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 112px;
-  height: 88px;
+  height: 132px;
   border-radius: 0.5rem;
   background: #f9fafb;
   overflow: hidden;
+}
+
+.batch-pane-label {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 1;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.25rem;
+  background: rgba(255, 255, 255, 0.9);
+  color: #374151;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1rem;
 }
 
 .batch-image {
@@ -329,16 +351,14 @@ a {
 
 @media (max-width: 767px) {
   .batch-card {
-    grid-template-columns: 88px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .batch-thumb {
-    width: 88px;
-    height: 72px;
+  .batch-pane {
+    height: 116px;
   }
 
   .batch-actions {
-    grid-column: 1 / -1;
     justify-content: flex-end;
   }
 }

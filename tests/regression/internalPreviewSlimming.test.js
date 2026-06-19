@@ -19,6 +19,11 @@ test('internal preview app should keep lightweight batch processing without reti
     assert.equal(appSource.includes('async function processQueue('), true);
     assert.equal(appSource.includes('multiPreview'), true);
     assert.equal(appSource.includes('imageList'), true);
+    assert.equal(appSource.includes('batch-comparison'), true);
+    assert.equal(appSource.includes('batch-pane original'), true);
+    assert.equal(appSource.includes('batch-pane processed'), true);
+    assert.equal(appSource.includes('id="original-${item.id}"'), true);
+    assert.equal(appSource.includes('id="processed-${item.id}"'), true);
 });
 
 test('internal preview app should not keep runtime i18n or dark-mode wiring', () => {
