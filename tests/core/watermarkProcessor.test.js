@@ -1975,6 +1975,39 @@ test('processWatermarkImageData should keep 20260520-5.png on the full 96px anch
     );
 });
 
+test('processWatermarkImageData should keep 20260617.png on the full canonical 96px star watermark', async () => {
+    const alpha48 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_48.png')));
+    const alpha96 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96.png')));
+    const imageData = await decodeImageDataInNode(path.resolve('src/assets/samples/20260617.png'));
+
+    const result = processWatermarkImageData(imageData, {
+        alpha48,
+        alpha96,
+        adaptiveMode: 'never',
+        getAlphaMap: (size) => size === 48 ? alpha48 : interpolateAlphaMap(alpha96, 96, size)
+    });
+
+    assert.equal(result.meta.applied, true, `skipReason=${result.meta.skipReason}`);
+    assert.deepEqual(
+        result.meta.config,
+        { logoSize: 96, marginRight: 64, marginBottom: 64 },
+        `expected full canonical 96px anchor, got ${JSON.stringify(result.meta.config)}`
+    );
+    assert.equal(result.meta.alphaGain, 1, `expected standard alpha, got ${result.meta.alphaGain}`);
+    assert.ok(
+        !String(result.meta.source).includes('localized-small'),
+        `expected full canonical 96px removal, got ${result.meta.source}`
+    );
+    assert.ok(
+        result.meta.detection.processedGradientScore <= 0.02,
+        `expected full 96px removal to clear the visible star edge, detection=${JSON.stringify(result.meta.detection)}`
+    );
+    assert.ok(
+        result.meta.detection.processedSpatialScore <= 0.26,
+        `expected bounded full-anchor residual, detection=${JSON.stringify(result.meta.detection)}`
+    );
+});
+
 test('processWatermarkImageData should expose stage timings when debugTimings is enabled', () => {
     const alpha96 = createSyntheticAlphaMap(96);
     const alpha48 = interpolateAlphaMap(alpha96, 96, 48);

@@ -756,7 +756,7 @@ test('low-contrast catalog watermarks should use conservative removal instead of
     }
 });
 
-test('20260617.png should avoid canonical 96 aggressive oversubtraction', async (t) => {
+test('20260617.png should keep the full canonical 96px star watermark anchor', async (t) => {
     if (!await ensureSampleAssetAvailable(t, '20260617.png')) return;
 
     let browser;
@@ -791,8 +791,8 @@ test('20260617.png should avoid canonical 96 aggressive oversubtraction', async 
         );
         assert.equal(result.meta.alphaGain, 1, `expected standard alpha, got ${result.meta.alphaGain}`);
         assert.ok(
-            !String(result.meta.source).includes('located-aggressive'),
-            `expected standard removal to avoid aggressive dark-star oversubtraction, source=${result.meta.source}`
+            !String(result.meta.source).includes('localized-small'),
+            `expected full canonical 96px removal, source=${result.meta.source}`
         );
         assert.ok(
             result.meta.detection.processedGradientScore <= 0.02,
