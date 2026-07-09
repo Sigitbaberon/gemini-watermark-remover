@@ -8,6 +8,17 @@
 - Served the packaged video preview page over a temporary local HTTP URL so the browser runtime can fetch model assets reliably instead of failing from a `file://` page.
 - Kept explicit `--video-denoise-backend` CLI selections from being overwritten by automatic video presets.
 
+### Video
+
+- Addressed issue #97 by adding BT.709 limited-range color metadata to video exports to improve color grading consistency and player compatibility.
+- Added source-structure protection around video watermark cleanup to reduce edge and background-transition artifacts.
+
+### Release
+
+- Published `v1.0.29` to npm, GitHub Release, the hosted userscript, and the official website fallback extension zip.
+- Verified the website extension zip at `72891819454366cf5fc9f21e561bc6a0cf0179a34d57cb076e96aa2ae774ff31 / 1092502` bytes.
+- Closed issue #97 as addressed in `v1.0.29`; Chrome Web Store propagation remains the only post-release waiting item.
+
 ### Quality
 
 - Added package and SDK regression coverage for packed video assets, local preview-page serving, and packaged CLI video export.

@@ -303,7 +303,7 @@ Local files under `src/assets/samples/fix/` are optional snapshot outputs for ma
 
 ## Release Notes
 
-See [CHANGELOG.md](CHANGELOG.md) for release history and [RELEASE.md](RELEASE.md) for the local release checklist.
+See [CHANGELOG.md](CHANGELOG.md) for release history and [RELEASE.md](RELEASE.md) for the local release checklist. The latest post-release closeout is documented in [docs/release-1.0.29-post-release.md](docs/release-1.0.29-post-release.md).
 
 ## How Gemini Watermark Removal Works
 

@@ -8,6 +8,17 @@
 - 将打包后的 video preview 页面通过临时本地 HTTP 地址提供给浏览器，避免 `file://` 页面无法可靠 fetch 模型资产导致视频去水印失败。
 - 修复显式传入的 `--video-denoise-backend` 会被自动视频 preset 覆盖的问题。
 
+### 视频
+
+- 处理 issue #97：为视频导出加入 BT.709 limited-range 色彩元数据，改善导出后色彩一致性和播放器兼容性。
+- 在视频水印清理周围加入源结构保护，降低水印区域边缘和背景过渡处的伪影风险。
+
+### 发版
+
+- 已将 `v1.0.29` 发布到 npm、GitHub Release、托管 userscript，以及官网备用 Chrome 插件 zip。
+- 已验证官网插件 zip：`72891819454366cf5fc9f21e561bc6a0cf0179a34d57cb076e96aa2ae774ff31 / 1092502` bytes。
+- issue #97 已按 `v1.0.29` 处理完成关闭；Chrome Web Store 传播仍是唯一发布后等待项。
+
 ### 质量
 
 - 新增发布包和 SDK 回归覆盖，固定视频资产打包、本地 preview 页面服务，以及打包后 CLI 视频导出链路。

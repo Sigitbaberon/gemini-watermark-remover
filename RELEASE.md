@@ -109,11 +109,14 @@ If you maintain a separate public website for the project, sync it after the Git
 6. Remove stale older extension zip and checksum files from `public/downloads/`.
 7. Run `pnpm test` and `pnpm run build` in the website project.
 8. Deploy with `pnpm run deploy:cf-workers`.
+9. Back in this repository, run `pnpm release:distribution-check` and keep the generated report as the source of truth for release surface status.
 
 `pnpm run deploy:cf-workers` may finish the Cloudflare deployment successfully and then report a Sentry release finalization error. If Wrangler prints a current version ID and the live site verifies correctly, treat the website deployment as published, then investigate Sentry separately.
 
 ## Post-Release
 
+- confirm `pnpm release:distribution-check` reports `ok` for local package, GitHub Release, release assets, npm latest, website userscript, website `latest-extension.json`, and website extension zip
+- if the only remaining item is `chrome-web-store-update: waiting`, treat the release as distributed everywhere except Chrome Web Store propagation/review; keep the release open only for store follow-up
 - confirm the installed userscript reports the expected version
 - confirm the GitHub Release latest userscript serves the latest bundle:
   `https://github.com/GargantuaX/gemini-watermark-remover/releases/latest/download/gemini-watermark-remover.user.js`
@@ -123,4 +126,5 @@ If you maintain a separate public website for the project, sync it after the Git
   `https://chromewebstore.google.com/detail/gemini-watermark-remover/cjlmnfcfnofnglkphbcdclbpimdjkmdf`
 - confirm the official website points the primary Chrome extension CTA to Chrome Web Store and still serves the latest fallback zip with matching checksum
 - confirm `https://geminiwatermarkremover.io/downloads/latest-extension.json` reports the latest extension version, file, size, and sha256
+- update the GitHub Release notes and any directly addressed GitHub issues with the shipped version, verification evidence, and any remaining propagation caveat
 - keep any ad hoc verification notes in the release PR or tag notes, not in source docs

@@ -303,7 +303,7 @@ pnpm test
 
 ## 发版说明
 
-版本变更请看 [CHANGELOG_zh.md](CHANGELOG_zh.md)，本地发版清单见 [RELEASE_zh.md](RELEASE_zh.md)。
+版本变更请看 [CHANGELOG_zh.md](CHANGELOG_zh.md)，本地发版清单见 [RELEASE_zh.md](RELEASE_zh.md)。最新发布收尾记录见 [docs/release-1.0.29-post-release.md](docs/release-1.0.29-post-release.md)。
 
 ## Gemini 水印去除算法原理
 

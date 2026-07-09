@@ -109,11 +109,14 @@ gh release create v<version> \
 6. 从 `public/downloads/` 删除旧版本 zip 和 checksum 文件。
 7. 在官网项目中运行 `pnpm test` 和 `pnpm run build`。
 8. 使用 `pnpm run deploy:cf-workers` 部署官网。
+9. 回到当前仓库运行 `pnpm release:distribution-check`，以生成的报告作为发布面状态的最终依据。
 
 `pnpm run deploy:cf-workers` 可能已经成功完成 Cloudflare 部署，但最后报告 Sentry release finalize 错误。如果 Wrangler 打印了当前 version ID，并且线上站点验证通过，应先把官网部署视为已发布，再单独排查 Sentry。
 
 ## 发布后检查
 
+- 确认 `pnpm release:distribution-check` 对 local package、GitHub Release、release assets、npm latest、官网 userscript、官网 `latest-extension.json` 和官网 extension zip 都输出 `ok`
+- 如果唯一剩余项是 `chrome-web-store-update: waiting`，则把本次发布视为除 Chrome Web Store 审核/传播外已经完成，后续只跟进商店状态
 - 确认浏览器里已安装的 userscript 显示正确版本号
 - 确认 GitHub Release latest userscript 返回最新产物：
   `https://github.com/GargantuaX/gemini-watermark-remover/releases/latest/download/gemini-watermark-remover.user.js`
@@ -123,4 +126,5 @@ gh release create v<version> \
   `https://chromewebstore.google.com/detail/gemini-watermark-remover/cjlmnfcfnofnglkphbcdclbpimdjkmdf`
 - 确认官网 Chrome 插件主 CTA 指向 Chrome Web Store，同时仍提供最新备用 zip，且校验值一致
 - 确认 `https://geminiwatermarkremover.io/downloads/latest-extension.json` 返回最新插件版本、文件名、体积和 sha256
+- 更新 GitHub Release note 和本次直接处理的 GitHub issue，写明已发布版本、验证证据，以及仍在等待的传播事项
 - 临时性的验证记录放到 release note 或 PR 里，不继续堆在仓库文档中
