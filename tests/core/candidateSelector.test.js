@@ -4,11 +4,13 @@ import path from 'node:path';
 
 import {
     assessReferenceTextureAlignment,
+    calculateNearBlackRatio,
     evaluateRestorationCandidate,
     pickBetterCandidate,
     selectInitialCandidate
 } from '../../src/core/candidateSelector.js';
 import { calculateAlphaMap } from '../../src/core/alphaMap.js';
+import { getEmbeddedAlphaMap } from '../../src/core/embeddedAlphaMaps.js';
 import { interpolateAlphaMap, warpAlphaMap } from '../../src/core/adaptiveDetector.js';
 import { decodeImageDataInNode } from '../../scripts/sample-benchmark.js';
 import {
@@ -16,6 +18,327 @@ import {
     createPatternImageData,
     createSyntheticAlphaMap
 } from './syntheticWatermarkTestUtils.js';
+
+function createPaleFlatImageData(width, height) {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const index = (y * width + x) * 4;
+            const value = 204 + ((x + y) % 3);
+            data[index] = value;
+            data[index + 1] = value + 1;
+            data[index + 2] = value + 3;
+            data[index + 3] = 255;
+        }
+    }
+    return { width, height, data };
+}
+
+test('evaluateRestorationCandidate should reject weak nearby dark-polarity trials that create a near-white block', async () => {
+    const imageData = await decodeImageDataInNode(path.resolve(
+        'tests/fixtures/issue101-weak-dark-polarity-damage.png'
+    ));
+    const alphaMap = calculateAlphaMap(await decodeImageDataInNode(path.resolve(
+        'src/assets/bg_96_20260520.png'
+    )));
+    const darkAlphaMap = new Float32Array(alphaMap.length);
+    for (let index = 0; index < alphaMap.length; index++) {
+        darkAlphaMap[index] = -alphaMap[index];
+    }
+    for (const position of [
+        { x: 48, y: 48, width: 96, height: 96 },
+        { x: 48, y: 52, width: 96, height: 96 }
+    ]) {
+        const result = evaluateRestorationCandidate({
+            originalImageData: imageData,
+            alphaMap: darkAlphaMap,
+            position,
+            source: 'standard+catalog+dark-polarity',
+            config: {
+                logoSize: 96,
+                marginRight: 192,
+                marginBottom: 192,
+                alphaVariant: '20260520'
+            },
+            baselineNearBlackRatio: calculateNearBlackRatio(imageData, position),
+            alphaGain: 1,
+            provenance: {
+                catalogVariant: true,
+                darkPolarity: true,
+                alphaVariant: '20260520'
+            },
+            includeImageData: false
+        });
+
+        assert.equal(result.accepted, false, `position=${JSON.stringify(position)}`);
+        assert.equal(result.evaluation.blockedGate, 'darkPolarityNearWhiteIncreaseAllowed');
+        assert.ok(result.nearWhiteIncrease > 0.2, `nearWhiteIncrease=${result.nearWhiteIncrease}`);
+    }
+});
+
+test('evaluateRestorationCandidate should admit the issue101 light-outline template only with strong structural evidence', async () => {
+    const alphaMap = getEmbeddedAlphaMap('96-outline-light');
+    assert.ok(alphaMap, 'expected the embedded light-outline alpha map');
+    assert.ok(alphaMap.some((value) => value > 0.1), 'expected a white core');
+    assert.ok(alphaMap.some((value) => value < -0.01), 'expected a dark outline');
+
+    const targetImageData = await decodeImageDataInNode(path.resolve(
+        'tests/fixtures/issue101-outline-light-portrait.png'
+    ));
+    const targetPosition = { x: 48, y: 48, width: 96, height: 96 };
+    const sharedCandidate = {
+        alphaMap,
+        source: 'standard+catalog+outline-light',
+        config: {
+            logoSize: 96,
+            marginRight: 192,
+            marginBottom: 192,
+            alphaVariant: 'outline-light'
+        },
+        alphaGain: 1,
+        provenance: {
+            catalogVariant: true,
+            alphaVariant: 'outline-light',
+            outlineLight: true
+        },
+        includeImageData: false
+    };
+    const target = evaluateRestorationCandidate({
+        ...sharedCandidate,
+        originalImageData: targetImageData,
+        position: targetPosition,
+        baselineNearBlackRatio: calculateNearBlackRatio(targetImageData, targetPosition)
+    });
+
+    assert.equal(target.accepted, true);
+    assert.equal(target.evaluation.gates.outlineLightEvidenceAllowed, true);
+    assert.ok(target.originalGradientScore >= 0.45, `originalGradient=${target.originalGradientScore}`);
+    assert.ok(target.improvement >= 0.35, `improvement=${target.improvement}`);
+    assert.ok(target.processedGradientScore <= 0.25, `processedGradient=${target.processedGradientScore}`);
+
+    const falsePositiveImageData = await decodeImageDataInNode(path.resolve(
+        'tests/fixtures/issue92-new-margin-default-alpha.png'
+    ));
+    const falsePositivePosition = {
+        x: falsePositiveImageData.width - 192 - 96,
+        y: falsePositiveImageData.height - 192 - 96,
+        width: 96,
+        height: 96
+    };
+    const falsePositive = evaluateRestorationCandidate({
+        ...sharedCandidate,
+        originalImageData: falsePositiveImageData,
+        position: falsePositivePosition,
+        baselineNearBlackRatio: calculateNearBlackRatio(falsePositiveImageData, falsePositivePosition)
+    });
+
+    assert.equal(falsePositive.accepted, false);
+    assert.equal(falsePositive.evaluation.blockedGate, 'outlineLightEvidenceAllowed');
+    assert.equal(falsePositive.evaluation.gates.outlineLightEvidenceAllowed, false);
+});
+
+test('evaluateRestorationCandidate should repair the issue101 dark-outline contour without broad inpaint', async () => {
+    const alphaMap = getEmbeddedAlphaMap('96-outline-dark');
+    assert.ok(alphaMap, 'expected the embedded dark-outline alpha map');
+    assert.ok(alphaMap.some((value) => value > 0.02), 'expected a light body component');
+    assert.ok(alphaMap.some((value) => value < -0.05), 'expected a dark contour component');
+
+    const targetImageData = await decodeImageDataInNode(path.resolve(
+        'tests/fixtures/issue101-outline-dark-landscape.png'
+    ));
+    const position = { x: 48, y: 96, width: 96, height: 96 };
+    const result = evaluateRestorationCandidate({
+        originalImageData: targetImageData,
+        alphaMap,
+        position,
+        source: 'standard+catalog+outline-dark',
+        config: {
+            logoSize: 96,
+            marginRight: 192,
+            marginBottom: 192,
+            alphaVariant: 'outline-dark'
+        },
+        baselineNearBlackRatio: calculateNearBlackRatio(targetImageData, position),
+        alphaGain: 1,
+        provenance: {
+            catalogVariant: true,
+            alphaVariant: 'outline-dark',
+            outlineDark: true
+        }
+    });
+
+    assert.equal(result.accepted, true);
+    assert.equal(result.evaluation.gates.outlineDarkEvidenceAllowed, true);
+    assert.equal(result.outlineDarkRepair?.accepted, true);
+    assert.ok(result.outlineDarkRepair.maskPixels >= 32, `mask=${result.outlineDarkRepair.maskPixels}`);
+    assert.ok(result.outlineDarkRepair.maskPixels <= 96 * 96 * 0.1, `mask=${result.outlineDarkRepair.maskPixels}`);
+    assert.ok(result.originalGradientScore >= 0.38, `originalGradient=${result.originalGradientScore}`);
+    assert.ok(result.processedGradientScore <= 0.18, `processedGradient=${result.processedGradientScore}`);
+    assert.ok(Math.abs(result.processedSpatialScore) <= 0.15, `processedSpatial=${result.processedSpatialScore}`);
+
+    for (const fixture of [
+        'tests/fixtures/issue101-outline-light-portrait.png',
+        'tests/fixtures/issue101-weak-dark-polarity-damage.png',
+        'tests/fixtures/issue92-new-margin-default-alpha.png'
+    ]) {
+        const control = await decodeImageDataInNode(path.resolve(fixture));
+        const controlPosition = control.width === 192
+            ? { x: 48, y: 48, width: 96, height: 96 }
+            : {
+                x: control.width - 192 - 96,
+                y: control.height - 192 - 96,
+                width: 96,
+                height: 96
+            };
+        const controlResult = evaluateRestorationCandidate({
+            originalImageData: control,
+            alphaMap,
+            position: controlPosition,
+            source: 'standard+catalog+outline-dark',
+            config: {
+                logoSize: 96,
+                marginRight: 192,
+                marginBottom: 192,
+                alphaVariant: 'outline-dark'
+            },
+            baselineNearBlackRatio: calculateNearBlackRatio(control, controlPosition),
+            alphaGain: 1,
+            provenance: {
+                catalogVariant: true,
+                alphaVariant: 'outline-dark',
+                outlineDark: true
+            },
+            includeImageData: false
+        });
+        assert.equal(controlResult.accepted, false, fixture);
+        assert.equal(controlResult.evaluation.gates.outlineDarkEvidenceAllowed, false, fixture);
+    }
+});
+
+async function selectIssue101DarkOutlineFixture(fixtureName) {
+    const alpha48 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_48.png')));
+    const alpha96 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96.png')));
+    const alpha96Current = calculateAlphaMap(await decodeImageDataInNode(path.resolve(
+        'src/assets/bg_96_20260520.png'
+    )));
+    const outlineDarkAlpha = getEmbeddedAlphaMap('96-outline-dark');
+    const originalImageData = createPatternImageData(480, 480);
+    const issue101Crop = await decodeImageDataInNode(path.resolve(fixtureName));
+    const config = {
+        logoSize: 96,
+        marginRight: 192,
+        marginBottom: 192,
+        alphaVariant: '20260520'
+    };
+    const position = { x: 192, y: 192, width: 96, height: 96 };
+
+    for (let y = 0; y < issue101Crop.height; y++) {
+        for (let x = 0; x < issue101Crop.width; x++) {
+            const sourceIndex = (y * issue101Crop.width + x) * 4;
+            const targetIndex = ((96 + y) * originalImageData.width + 144 + x) * 4;
+            originalImageData.data.set(
+                issue101Crop.data.subarray(sourceIndex, sourceIndex + 4),
+                targetIndex
+            );
+        }
+    }
+
+    return selectInitialCandidate({
+        originalImageData,
+        config,
+        position,
+        alpha48,
+        alpha96,
+        alpha96Variants: {
+            '20260520': alpha96Current,
+            'outline-dark': outlineDarkAlpha
+        },
+        getAlphaMap: (size) => size === '96-outline-dark'
+            ? outlineDarkAlpha
+            : interpolateAlphaMap(alpha96, 96, size),
+        allowAdaptiveSearch: false,
+        allowAutomaticSearch: false,
+        alphaGainCandidates: [1],
+        alphaPriorityGains: [1]
+    });
+}
+
+test('selectInitialCandidate should preserve full dark-outline body gain for strong body evidence', async () => {
+    const result = await selectIssue101DarkOutlineFixture(
+        'tests/fixtures/issue101-outline-dark-landscape.png'
+    );
+
+    assert.equal(result.selectedTrial?.provenance?.outlineDark, true);
+    assert.equal(result.selectedTrial?.provenance?.outlineDarkBodyGain, 1);
+});
+
+test('selectInitialCandidate should reduce dark-outline body gain when the full body over-corrects', async () => {
+    const result = await selectIssue101DarkOutlineFixture(
+        'tests/fixtures/issue101-outline-dark-low-body-landscape.png'
+    );
+
+    assert.equal(result.selectedTrial?.provenance?.outlineDark, true);
+    assert.equal(result.selectedTrial?.provenance?.outlineDarkBodyGain, 0.5);
+    assert.ok(
+        Math.abs(result.selectedTrial.processedSpatialScore) <= 0.02,
+        `processedSpatial=${result.selectedTrial.processedSpatialScore}`
+    );
+});
+
+test('selectInitialCandidate should select the light-outline variant without replacing the canonical alpha map', async () => {
+    const alpha48 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_48.png')));
+    const alpha96 = calculateAlphaMap(await decodeImageDataInNode(path.resolve('src/assets/bg_96.png')));
+    const alpha96Current = calculateAlphaMap(await decodeImageDataInNode(path.resolve(
+        'src/assets/bg_96_20260520.png'
+    )));
+    const outlineAlpha = getEmbeddedAlphaMap('96-outline-light');
+    const originalImageData = createPatternImageData(480, 480);
+    const issue101Crop = await decodeImageDataInNode(path.resolve(
+        'tests/fixtures/issue101-outline-light-portrait.png'
+    ));
+    const config = {
+        logoSize: 96,
+        marginRight: 192,
+        marginBottom: 192,
+        alphaVariant: '20260520'
+    };
+    const position = { x: 192, y: 192, width: 96, height: 96 };
+    for (let y = 0; y < issue101Crop.height; y++) {
+        for (let x = 0; x < issue101Crop.width; x++) {
+            const sourceIndex = (y * issue101Crop.width + x) * 4;
+            const targetIndex = ((144 + y) * originalImageData.width + 144 + x) * 4;
+            originalImageData.data.set(
+                issue101Crop.data.subarray(sourceIndex, sourceIndex + 4),
+                targetIndex
+            );
+        }
+    }
+
+    const result = selectInitialCandidate({
+        originalImageData,
+        config,
+        position,
+        alpha48,
+        alpha96,
+        alpha96Variants: {
+            '20260520': alpha96Current,
+            'outline-light': outlineAlpha
+        },
+        getAlphaMap: (size) => size === '96-outline-light'
+            ? outlineAlpha
+            : interpolateAlphaMap(alpha96, 96, size),
+        allowAdaptiveSearch: false,
+        allowAutomaticSearch: false,
+        alphaGainCandidates: [1],
+        alphaPriorityGains: [1]
+    });
+
+    assert.ok(result.selectedTrial, 'expected a selected outline candidate');
+    assert.equal(result.selectedTrial.provenance?.outlineLight, true);
+    assert.equal(result.selectedTrial.provenance?.alphaVariant, 'outline-light');
+    assert.equal(result.selectedTrial.alphaMap, outlineAlpha);
+    assert.deepEqual(result.position, position);
+});
 
 test('selectInitialCandidate should return a skipped result when no standard trials can be built', () => {
     const imageData = createPatternImageData(456, 142);
@@ -82,6 +405,42 @@ test('selectInitialCandidate should not require eager adaptive search when the s
     assert.ok(result.source.startsWith('standard'), `source=${result.source}`);
     assert.equal(result.position.x, position.x);
     assert.equal(result.position.y, position.y);
+    assert.ok(Array.isArray(result.candidatePool));
+    assert.ok(result.candidatePool.includes(result.selectedTrial));
+    assert.equal(new Set(result.candidatePool).size, result.candidatePool.length);
+});
+
+test('selectInitialCandidate should preserve strong undersized adaptive provenance', () => {
+    const alpha96 = createSyntheticAlphaMap(96);
+    const alpha48 = interpolateAlphaMap(alpha96, 96, 48);
+    const imageData = createPaleFlatImageData(400, 500);
+    const target = { x: 260, y: 400, width: 40, height: 40 };
+    applySyntheticWatermark(
+        imageData,
+        interpolateAlphaMap(alpha96, 96, 40),
+        target,
+        1
+    );
+    const config = { logoSize: 96, marginRight: 64, marginBottom: 64 };
+    const position = { x: 240, y: 340, width: 96, height: 96 };
+
+    const result = selectInitialCandidate({
+        originalImageData: imageData,
+        config,
+        position,
+        alpha48,
+        alpha96,
+        getAlphaMap: (size) => interpolateAlphaMap(alpha96, 96, size),
+        allowAdaptiveSearch: true,
+        allowAutomaticSearch: true,
+        alphaGainCandidates: [0.6, 1],
+        alphaPriorityGains: [0.6, 1]
+    });
+
+    assert.ok(result.selectedTrial, 'expected an adaptive candidate');
+    assert.equal(result.position.width, 40);
+    assert.equal(result.selectedTrial.provenance?.adaptive, true);
+    assert.equal(result.selectedTrial.provenance?.strongUndersizedMatch, true);
 });
 
 test('selectInitialCandidate should validate strong-alpha standard anchors before skipping', () => {

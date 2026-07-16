@@ -11,6 +11,7 @@ import {
     assessReferenceTextureAlignment,
     assessReferenceTextureAlignmentFromStats,
     calculateNearBlackRatio,
+    calculateNearWhiteRatio,
     cloneImageData,
     getRegionTextureStats,
     scoreRegion
@@ -38,6 +39,7 @@ import {
     matchOfficialGeminiImageSize,
     resolveGeminiWatermarkSearchCatalogEntries
 } from './geminiSizeCatalog.js';
+import { repairDarkOutlineContour } from './darkOutlineContourRepair.js';
 
 const MAX_NEAR_BLACK_RATIO_INCREASE = 0.05;
 const VALIDATION_MIN_IMPROVEMENT = 0.08;
@@ -136,6 +138,24 @@ const BOTTOM_RIGHT_48_EVIDENCE_DOMINANCE_MAX_RESIDUAL_DELTA = 0.08;
 const DARK_POLARITY_CATALOG_MIN_ORIGINAL_SPATIAL = 0.12;
 const DARK_POLARITY_CATALOG_MIN_ORIGINAL_GRADIENT = 0.08;
 const DARK_POLARITY_CATALOG_MAX_TEXTURE_FOR_WEAK_EVIDENCE = 0.25;
+const DARK_POLARITY_MAX_NEAR_WHITE_RATIO_INCREASE_FOR_WEAK_EVIDENCE = 0.05;
+const DARK_POLARITY_NEAR_WHITE_OVERRIDE_MIN_ORIGINAL_SPATIAL = 0.4;
+const DARK_POLARITY_NEAR_WHITE_OVERRIDE_MIN_ORIGINAL_GRADIENT = 0.3;
+const OUTLINE_LIGHT_MIN_ORIGINAL_GRADIENT = 0.45;
+const OUTLINE_LIGHT_MIN_IMPROVEMENT = 0.35;
+const OUTLINE_LIGHT_MAX_PROCESSED_SPATIAL = 0.2;
+const OUTLINE_LIGHT_MAX_PROCESSED_GRADIENT = 0.25;
+const OUTLINE_DARK_MIN_ORIGINAL_GRADIENT = 0.38;
+const OUTLINE_DARK_MIN_IMPROVEMENT = 0.2;
+const OUTLINE_DARK_MAX_PROCESSED_SPATIAL = 0.15;
+const OUTLINE_DARK_MAX_PROCESSED_GRADIENT = 0.18;
+const OUTLINE_DARK_MIN_REPAIR_PIXELS = 32;
+const OUTLINE_DARK_MAX_REPAIR_PIXELS = 96 * 96 * 0.1;
+const OUTLINE_DARK_BODY_GAINS = Object.freeze([1, 0.85, 0.75, 0.65, 0.5]);
+const OUTLINE_DARK_MIN_BODY_GAIN = 0.5;
+const OUTLINE_DARK_BODY_GAIN_GRADIENT_WEIGHT = 0.6;
+const OUTLINE_DARK_BODY_GAIN_MIN_COST_IMPROVEMENT = 0.015;
+const OUTLINE_DARK_BODY_GAIN_SEARCH_MAX_FULL_BODY_SPATIAL = -0.05;
 const TEMPLATE_ALIGN_SHIFTS = [-0.5, -0.25, 0, 0.25, 0.5];
 const TEMPLATE_ALIGN_SCALES = [0.99, 1, 1.01];
 const STANDARD_NEARBY_SHIFTS = [-12, -8, -4, 0, 4, 8, 12];
@@ -194,7 +214,12 @@ const CURRENT_LARGE_MARGIN_GRADIENT_CLEAR_MAX_TEXTURE = 0.08;
 const CURRENT_LARGE_MARGIN_GRADIENT_CLEAR_MAX_SPATIAL = 0.32;
 const CURRENT_LARGE_MARGIN_GRADIENT_CLEAR_MIN_GRADIENT_DROP = 0.12;
 
-export { assessReferenceTextureAlignment, calculateNearBlackRatio, scoreRegion } from './restorationMetrics.js';
+export {
+    assessReferenceTextureAlignment,
+    calculateNearBlackRatio,
+    calculateNearWhiteRatio,
+    scoreRegion
+} from './restorationMetrics.js';
 
 const ORIGIN_REGION = Object.freeze({ x: 0, y: 0 });
 
@@ -316,6 +341,57 @@ function buildStandardCandidateSeeds({
         };
         seeds.push(baseSeed);
 
+        const outlineLightAlphaMap = candidateConfig.logoSize === 96 &&
+            candidateConfig.marginRight === 192 &&
+            candidateConfig.marginBottom === 192
+            ? alpha96Variants?.['outline-light'] ?? null
+            : null;
+        if (outlineLightAlphaMap) {
+            seeds.push({
+                ...baseSeed,
+                config: {
+                    ...candidateConfig,
+                    alphaVariant: 'outline-light'
+                },
+                alphaMap: outlineLightAlphaMap,
+                source: `${baseSeed.source}+outline-light`,
+                provenance: mergeCandidateProvenance(
+                    baseSeed.provenance,
+                    {
+                        catalogVariant: true,
+                        alphaVariant: 'outline-light',
+                        outlineLight: true
+                    }
+                )
+            });
+        }
+
+        const outlineDarkAlphaMap = candidateConfig.logoSize === 96 &&
+            candidateConfig.marginRight === 192 &&
+            candidateConfig.marginBottom === 192
+            ? alpha96Variants?.['outline-dark'] ?? null
+            : null;
+        if (outlineDarkAlphaMap) {
+            seeds.push({
+                ...baseSeed,
+                config: {
+                    ...candidateConfig,
+                    alphaVariant: 'outline-dark'
+                },
+                alphaMap: outlineDarkAlphaMap,
+                source: `${baseSeed.source}+outline-dark`,
+                provenance: mergeCandidateProvenance(
+                    baseSeed.provenance,
+                    {
+                        catalogVariant: true,
+                        alphaVariant: 'outline-dark',
+                        outlineDark: true,
+                        outlineDarkBodyGain: 1
+                    }
+                )
+            });
+        }
+
         if (shouldAddDarkPolaritySeed(candidateConfig)) {
             seeds.push({
                 ...baseSeed,
@@ -339,6 +415,28 @@ function shouldAddDarkPolaritySeed(config) {
 }
 
 const negativeAlphaMapCache = new WeakMap();
+const outlineDarkBodyGainAlphaMapCache = new WeakMap();
+
+function createOutlineDarkBodyGainAlphaMap(alphaMap, bodyGain) {
+    if (bodyGain === 1) return alphaMap;
+
+    let gainCache = outlineDarkBodyGainAlphaMapCache.get(alphaMap);
+    if (!gainCache) {
+        gainCache = new Map();
+        outlineDarkBodyGainAlphaMapCache.set(alphaMap, gainCache);
+    }
+
+    const cached = gainCache.get(bodyGain);
+    if (cached) return cached;
+
+    const scaled = new Float32Array(alphaMap.length);
+    for (let index = 0; index < alphaMap.length; index++) {
+        const value = alphaMap[index];
+        scaled[index] = value > 0 ? value * bodyGain : value;
+    }
+    gainCache.set(bodyGain, scaled);
+    return scaled;
+}
 
 function createNegativeAlphaMap(alphaMap) {
     const cached = negativeAlphaMapCache.get(alphaMap);
@@ -788,12 +886,15 @@ export function evaluateRestorationCandidate({
     if (!alphaMap || !position) return null;
 
     const originalScores = scoreRegion(originalImageData, alphaMap, position);
-    const regionImageData = createCandidateRegionImageData({
+    const regionCandidate = createCandidateRegionImageData({
         originalImageData,
         alphaMap,
         position,
-        alphaGain
+        alphaGain,
+        provenance
     });
+    const regionImageData = regionCandidate.imageData;
+    const outlineDarkRepair = regionCandidate.outlineDarkRepair;
     const regionPosition = {
         x: ORIGIN_REGION.x,
         y: ORIGIN_REGION.y,
@@ -803,6 +904,9 @@ export function evaluateRestorationCandidate({
     const processedScores = scoreRegion(regionImageData, alphaMap, regionPosition);
     const nearBlackRatio = calculateNearBlackRatio(regionImageData, regionPosition);
     const nearBlackIncrease = nearBlackRatio - baselineNearBlackRatio;
+    const baselineNearWhiteRatio = calculateNearWhiteRatio(originalImageData, position);
+    const nearWhiteRatio = calculateNearWhiteRatio(regionImageData, regionPosition);
+    const nearWhiteIncrease = nearWhiteRatio - baselineNearWhiteRatio;
     // Signed suppression keeps legitimate "slight overshoot" restores eligible.
     const improvement = originalScores.spatialScore - processedScores.spatialScore;
     const gradientIncrease = processedScores.gradientScore - originalScores.gradientScore;
@@ -887,18 +991,61 @@ export function evaluateRestorationCandidate({
         catalogEvidenceGate !== 'medium' ||
         originalScores.spatialScore >= 0.15 ||
         originalScores.gradientScore >= 0.08;
+    const strongDarkPolarityOriginalEvidence =
+        originalScores.spatialScore >= DARK_POLARITY_CATALOG_MIN_ORIGINAL_SPATIAL ||
+        originalScores.gradientScore >= DARK_POLARITY_CATALOG_MIN_ORIGINAL_GRADIENT;
     const darkPolarityCatalogEvidenceAllowed =
         provenance?.darkPolarity !== true ||
         provenance?.catalogVariant !== true ||
-        originalScores.spatialScore >= DARK_POLARITY_CATALOG_MIN_ORIGINAL_SPATIAL ||
-        originalScores.gradientScore >= DARK_POLARITY_CATALOG_MIN_ORIGINAL_GRADIENT ||
+        strongDarkPolarityOriginalEvidence ||
         texturePenalty <= DARK_POLARITY_CATALOG_MAX_TEXTURE_FOR_WEAK_EVIDENCE;
+    const strongDarkPolarityNearWhiteOverrideEvidence =
+        originalScores.spatialScore >= DARK_POLARITY_NEAR_WHITE_OVERRIDE_MIN_ORIGINAL_SPATIAL ||
+        originalScores.gradientScore >= DARK_POLARITY_NEAR_WHITE_OVERRIDE_MIN_ORIGINAL_GRADIENT;
+    const darkPolarityNearWhiteIncreaseAllowed =
+        provenance?.darkPolarity !== true ||
+        strongDarkPolarityNearWhiteOverrideEvidence ||
+        nearWhiteIncrease <= DARK_POLARITY_MAX_NEAR_WHITE_RATIO_INCREASE_FOR_WEAK_EVIDENCE;
+    const outlineLightEvidenceAllowed =
+        provenance?.outlineLight !== true ||
+        (
+            alphaGain === 1 &&
+            originalScores.gradientScore >= OUTLINE_LIGHT_MIN_ORIGINAL_GRADIENT &&
+            improvement >= OUTLINE_LIGHT_MIN_IMPROVEMENT &&
+            Math.abs(processedScores.spatialScore) <= OUTLINE_LIGHT_MAX_PROCESSED_SPATIAL &&
+                processedScores.gradientScore <= OUTLINE_LIGHT_MAX_PROCESSED_GRADIENT
+        );
+    const outlineDarkBodyGain = Number.isFinite(provenance?.outlineDarkBodyGain)
+        ? provenance.outlineDarkBodyGain
+        : 1;
+    const outlineDarkMinImprovement = OUTLINE_DARK_MIN_IMPROVEMENT * Math.max(
+        OUTLINE_DARK_MIN_BODY_GAIN,
+        Math.min(1, outlineDarkBodyGain)
+    );
+    const outlineDarkEvidenceAllowed =
+        provenance?.outlineDark !== true ||
+        (
+            alphaGain === 1 &&
+            outlineDarkRepair?.accepted === true &&
+            outlineDarkRepair.maskPixels >= OUTLINE_DARK_MIN_REPAIR_PIXELS &&
+            outlineDarkRepair.maskPixels <= OUTLINE_DARK_MAX_REPAIR_PIXELS &&
+            originalScores.gradientScore >= OUTLINE_DARK_MIN_ORIGINAL_GRADIENT &&
+            improvement >= outlineDarkMinImprovement &&
+            Math.abs(processedScores.spatialScore) <= OUTLINE_DARK_MAX_PROCESSED_SPATIAL &&
+            processedScores.gradientScore <= OUTLINE_DARK_MAX_PROCESSED_GRADIENT
+        );
+    const outlineDarkHardRejectAllowed =
+        textureAssessment.hardReject === true &&
+        outlineDarkEvidenceAllowed &&
+        provenance?.outlineDark === true &&
+        nearBlackIncrease <= 0.01;
     const baseValidationAccepted =
         (
             hardRejectAllowed ||
             conservativeCatalogHardRejectAllowed ||
             visibleCatalogHardRejectAllowed ||
-            newMarginAlphaHardRejectAllowed
+            newMarginAlphaHardRejectAllowed ||
+            outlineDarkHardRejectAllowed
         ) &&
         nearBlackIncreaseAllowed &&
         improvement >= VALIDATION_MIN_IMPROVEMENT &&
@@ -932,7 +1079,8 @@ export function evaluateRestorationCandidate({
     const hardRejectBypassed =
         conservativeCatalogHardRejectAllowed ||
         visibleCatalogHardRejectAllowed ||
-        newMarginAlphaHardRejectAllowed;
+        newMarginAlphaHardRejectAllowed ||
+        outlineDarkHardRejectAllowed;
     const damage = scoreDamage({
         hardReject: textureAssessment.hardReject === true && !hardRejectBypassed,
         nearBlackIncrease,
@@ -951,6 +1099,9 @@ export function evaluateRestorationCandidate({
             originalEvidenceAllowed,
             catalogEvidenceAllowed,
             darkPolarityCatalogEvidenceAllowed,
+            darkPolarityNearWhiteIncreaseAllowed,
+            outlineLightEvidenceAllowed,
+            outlineDarkEvidenceAllowed,
             baseValidationAccepted
         }
     });
@@ -984,8 +1135,9 @@ export function evaluateRestorationCandidate({
         earlyAccept,
         provenance: mergedProvenance,
         imageData: includeImageData
-            ? materializeCandidateImageData(originalImageData, alphaMap, position, alphaGain)
+            ? materializeCandidateImageData(originalImageData, alphaMap, position, alphaGain, provenance)
             : null,
+        outlineDarkRepair,
         originalSpatialScore: originalScores.spatialScore,
         originalGradientScore: originalScores.gradientScore,
         processedSpatialScore: processedScores.spatialScore,
@@ -993,6 +1145,8 @@ export function evaluateRestorationCandidate({
         improvement,
         nearBlackRatio,
         nearBlackIncrease,
+        nearWhiteRatio,
+        nearWhiteIncrease,
         gradientIncrease,
         tooDark: textureAssessment.tooDark,
         tooFlat: textureAssessment.tooFlat,
@@ -1062,7 +1216,8 @@ function createCandidateRegionImageData({
     originalImageData,
     alphaMap,
     position,
-    alphaGain
+    alphaGain,
+    provenance = null
 }) {
     const regionImageData = {
         width: position.width,
@@ -1084,12 +1239,24 @@ function createCandidateRegionImageData({
         height: position.height
     }, { alphaGain });
 
-    return regionImageData;
+    const outlineDarkRepair = provenance?.outlineDark === true && alphaGain === 1
+        ? repairDarkOutlineContour(regionImageData, {
+            x: 0,
+            y: 0,
+            width: position.width,
+            height: position.height
+        })
+        : null;
+
+    return { imageData: regionImageData, outlineDarkRepair };
 }
 
-function materializeCandidateImageData(originalImageData, alphaMap, position, alphaGain) {
+function materializeCandidateImageData(originalImageData, alphaMap, position, alphaGain, provenance = null) {
     const candidateImageData = cloneImageData(originalImageData);
     removeWatermark(candidateImageData, alphaMap, position, { alphaGain });
+    if (provenance?.outlineDark === true && alphaGain === 1) {
+        repairDarkOutlineContour(candidateImageData, position);
+    }
     return candidateImageData;
 }
 
@@ -1103,7 +1270,22 @@ function ensureCandidateImageData(candidate, originalImageData) {
             originalImageData,
             candidate.alphaMap,
             candidate.position,
-            candidate.alphaGain ?? 1
+            candidate.alphaGain ?? 1,
+            candidate.provenance
+        )
+    };
+}
+
+export function materializeCandidateTrial(candidate, originalImageData) {
+    if (!candidate?.alphaMap || !candidate?.position) return null;
+    return {
+        ...candidate,
+        imageData: materializeCandidateImageData(
+            originalImageData,
+            candidate.alphaMap,
+            candidate.position,
+            candidate.alphaGain ?? 1,
+            candidate.provenance
         )
     };
 }
@@ -2523,6 +2705,112 @@ function promoteBaseCandidate(baseCandidate, baseDecisionTier, candidate, {
     };
 }
 
+function shouldPreferOutlineDarkCandidate(currentCandidate, outlineDarkCandidate) {
+    if (
+        outlineDarkCandidate?.accepted !== true ||
+        outlineDarkCandidate?.provenance?.outlineDark !== true ||
+        outlineDarkCandidate?.evaluation?.gates?.outlineDarkEvidenceAllowed !== true
+    ) {
+        return false;
+    }
+    if (!currentCandidate) return true;
+    if (currentCandidate?.provenance?.outlineDark === true) return false;
+    if (!sameCandidateAnchor(currentCandidate, outlineDarkCandidate)) return false;
+
+    return currentCandidate?.damage?.safe !== true ||
+        Math.abs(Number(currentCandidate.processedSpatialScore)) > OUTLINE_DARK_MAX_PROCESSED_SPATIAL ||
+        Math.max(0, Number(currentCandidate.processedGradientScore)) > OUTLINE_DARK_MAX_PROCESSED_GRADIENT;
+}
+
+function getOutlineDarkBodyGainResidualCost(candidate) {
+    const processedSpatial = Number(candidate?.processedSpatialScore);
+    const processedGradient = Number(candidate?.processedGradientScore);
+    if (!Number.isFinite(processedSpatial) || !Number.isFinite(processedGradient)) {
+        return Infinity;
+    }
+
+    return Math.abs(processedSpatial) +
+        Math.max(0, processedGradient) * OUTLINE_DARK_BODY_GAIN_GRADIENT_WEIGHT;
+}
+
+function pickBestOutlineDarkCandidate(candidates) {
+    const accepted = candidates.filter((candidate) => (
+        candidate?.accepted === true &&
+        candidate?.provenance?.outlineDark === true &&
+        candidate?.evaluation?.gates?.outlineDarkEvidenceAllowed === true
+    ));
+    if (accepted.length === 0) return null;
+
+    const fullBodyCandidate = accepted.find((candidate) => (
+        Number(candidate.provenance?.outlineDarkBodyGain ?? 1) === 1
+    )) ?? null;
+    const anchorCandidate = fullBodyCandidate ?? accepted[0];
+    let bestCandidate = anchorCandidate;
+    let bestCost = getOutlineDarkBodyGainResidualCost(bestCandidate);
+
+    for (const candidate of accepted) {
+        if (!sameCandidateAnchor(anchorCandidate, candidate)) continue;
+        const candidateCost = getOutlineDarkBodyGainResidualCost(candidate);
+        if (candidateCost < bestCost) {
+            bestCandidate = candidate;
+            bestCost = candidateCost;
+        }
+    }
+
+    if (!fullBodyCandidate || bestCandidate === fullBodyCandidate) {
+        return bestCandidate;
+    }
+
+    const fullBodyCost = getOutlineDarkBodyGainResidualCost(fullBodyCandidate);
+    return fullBodyCost - bestCost >= OUTLINE_DARK_BODY_GAIN_MIN_COST_IMPROVEMENT
+        ? bestCandidate
+        : fullBodyCandidate;
+}
+
+function searchOutlineDarkBodyGainCandidates({
+    originalImageData,
+    standardTrials
+}) {
+    const fullBodyCandidate = standardTrials.find((candidate) => (
+        candidate?.provenance?.outlineDark === true &&
+        Number(candidate.provenance?.outlineDarkBodyGain ?? 1) === 1
+    )) ?? null;
+    if (!fullBodyCandidate) return [];
+
+    const fullBodySpatial = Number(fullBodyCandidate.processedSpatialScore);
+    const shouldSearch =
+        fullBodyCandidate.outlineDarkRepair?.accepted === true &&
+        Number.isFinite(fullBodySpatial) &&
+        fullBodySpatial <= OUTLINE_DARK_BODY_GAIN_SEARCH_MAX_FULL_BODY_SPATIAL;
+    if (!shouldSearch) return [fullBodyCandidate];
+
+    const candidates = [fullBodyCandidate];
+    const baselineNearBlackRatio = calculateNearBlackRatio(
+        originalImageData,
+        fullBodyCandidate.position
+    );
+    for (const bodyGain of OUTLINE_DARK_BODY_GAINS) {
+        if (bodyGain === 1) continue;
+        const candidate = evaluateRestorationCandidate({
+            originalImageData,
+            alphaMap: createOutlineDarkBodyGainAlphaMap(fullBodyCandidate.alphaMap, bodyGain),
+            position: fullBodyCandidate.position,
+            source: `${fullBodyCandidate.source}+body-gain`,
+            config: fullBodyCandidate.config,
+            baselineNearBlackRatio,
+            alphaGain: 1,
+            provenance: mergeCandidateProvenance(
+                fullBodyCandidate.provenance,
+                { outlineDarkBodyGain: bodyGain }
+            ),
+            includeImageData: false
+        });
+        if (candidate) candidates.push(candidate);
+    }
+
+    return candidates;
+}
+
 function evaluateAdaptiveTrial({
     originalImageData,
     config,
@@ -2584,7 +2872,12 @@ function evaluateAdaptiveTrial({
             config: adaptiveConfig,
             baselineNearBlackRatio: calculateNearBlackRatio(originalImageData, adaptivePosition),
             adaptiveConfidence: adaptive.confidence,
-            provenance: { adaptive: true },
+            provenance: mergeCandidateProvenance(
+                { adaptive: true },
+                adaptive.strongUndersizedMatch === true
+                    ? { strongUndersizedMatch: true }
+                    : null
+            ),
             includeImageData: false
         })
     };
@@ -2735,6 +3028,15 @@ export function selectInitialCandidate({
         alphaPriorityGains,
         forceCatalogVariants: !allowAutomaticSearch
     });
+    const candidatePool = [];
+    const observeCandidates = (...values) => {
+        for (const candidate of values.flat()) {
+            if (candidate && !candidatePool.includes(candidate)) {
+                candidatePool.push(candidate);
+            }
+        }
+    };
+    observeCandidates(standardTrials);
     let baseCandidate = null;
     let baseDecisionTier = 'insufficient';
     if (hasReliableStandardMatch && standardTrial?.accepted) {
@@ -2753,6 +3055,7 @@ export function selectInitialCandidate({
     let adaptiveTrial = null;
     for (const candidate of standardTrials) {
         if (!candidate || candidate === standardTrial) continue;
+        if (candidate.provenance?.outlineDark === true) continue;
         ({
             baseCandidate,
             baseDecisionTier
@@ -2762,6 +3065,23 @@ export function selectInitialCandidate({
                 gradientScore: candidate.originalGradientScore
             })
         }));
+    }
+
+    const outlineDarkCandidate = pickBestOutlineDarkCandidate(
+        searchOutlineDarkBodyGainCandidates({
+            originalImageData,
+            standardTrials
+        })
+    );
+    observeCandidates(outlineDarkCandidate);
+    if (shouldPreferOutlineDarkCandidate(baseCandidate, outlineDarkCandidate)) {
+        baseCandidate = outlineDarkCandidate;
+        baseDecisionTier = hasReliableStandardWatermarkSignal({
+            spatialScore: outlineDarkCandidate.originalSpatialScore,
+            gradientScore: outlineDarkCandidate.originalGradientScore
+        })
+            ? 'direct-match'
+            : 'validated-match';
     }
 
     ({
@@ -2775,6 +3095,7 @@ export function selectInitialCandidate({
         baseDecisionTier,
         alphaGainCandidates
     }));
+    observeCandidates(baseCandidate);
 
     const defaultAlphaNewMarginRescue = searchDefaultAlphaNewMarginRescue({
         originalImageData,
@@ -2782,6 +3103,7 @@ export function selectInitialCandidate({
         alpha96,
         alphaGainCandidates
     });
+    observeCandidates(defaultAlphaNewMarginRescue);
     if (defaultAlphaNewMarginRescue) {
         ({
             baseCandidate,
@@ -2799,6 +3121,7 @@ export function selectInitialCandidate({
             resolveAlphaMap,
             adaptiveConfidence
         });
+        observeCandidates(previewAnchorCandidate);
         if (previewAnchorCandidate) {
             ({
                 baseCandidate,
@@ -2821,6 +3144,7 @@ export function selectInitialCandidate({
             getAlphaMap,
             resolveAlphaMap
         });
+        observeCandidates(sizeJitterCandidate);
         if (sizeJitterCandidate) {
             ({
                 baseCandidate,
@@ -2842,6 +3166,7 @@ export function selectInitialCandidate({
             seedCandidate: baseCandidate,
             adaptiveConfidence
         });
+        observeCandidates(fineLocalCandidate);
         if (fineLocalCandidate) {
             ({
                 baseCandidate,
@@ -2881,6 +3206,7 @@ export function selectInitialCandidate({
     }
 
     if (adaptiveTrial) {
+        observeCandidates(adaptiveTrial);
         ({
             baseCandidate,
             baseDecisionTier
@@ -2900,6 +3226,7 @@ export function selectInitialCandidate({
             candidateSeeds: standardCandidateSeeds,
             adaptiveConfidence
         });
+        observeCandidates(nearbyStandardCandidate);
         if (nearbyStandardCandidate) {
             ({
                 baseCandidate,
@@ -2914,6 +3241,7 @@ export function selectInitialCandidate({
             standardTrials,
             alphaGainCandidates
         });
+        observeCandidates(bestEffortCandidate);
         if (bestEffortCandidate) {
             baseCandidate = bestEffortCandidate;
             baseDecisionTier = 'direct-match';
@@ -2926,6 +3254,7 @@ export function selectInitialCandidate({
             standardTrials,
             alphaGainCandidates
         });
+        observeCandidates(bestEffortCandidate);
         if (bestEffortCandidate) {
             baseCandidate = bestEffortCandidate;
             baseDecisionTier = 'direct-match';
@@ -2936,6 +3265,7 @@ export function selectInitialCandidate({
                 resolveAlphaMap,
                 alphaGainCandidates
             });
+            observeCandidates(fixedCoreLocalGeometryCandidate);
             if (fixedCoreLocalGeometryCandidate) {
                 baseCandidate = fixedCoreLocalGeometryCandidate;
                 baseDecisionTier = 'direct-match';
@@ -2970,6 +3300,7 @@ export function selectInitialCandidate({
                     ...aggressiveLocatedCandidate,
                     source: `${aggressiveLocatedCandidate.source}+aggressive-located`
                 };
+                observeCandidates(baseCandidate);
                 baseDecisionTier = 'direct-match';
             } else {
             const fixedCoreLocalGeometryCandidate = !allowAutomaticSearch
@@ -2981,11 +3312,13 @@ export function selectInitialCandidate({
                 })
                 : null;
             if (fixedCoreLocalGeometryCandidate) {
+                observeCandidates(fixedCoreLocalGeometryCandidate);
                 baseCandidate = fixedCoreLocalGeometryCandidate;
                 baseDecisionTier = 'direct-match';
             } else {
                 return {
                     selectedTrial: null,
+                    candidatePool,
                     source: 'skipped',
                     alphaMap: fallbackAlphaMap,
                     position,
@@ -3004,6 +3337,7 @@ export function selectInitialCandidate({
                 ...validatedCandidate,
                 source: `${validatedCandidate.source}+validated`
             };
+            observeCandidates(baseCandidate);
             baseDecisionTier = 'validated-match';
         }
     }
@@ -3032,11 +3366,13 @@ export function selectInitialCandidate({
                 includeImageData: false
             })
             : null;
+        observeCandidates(initialCanonical96Candidate);
         const fixedCoreCanonical96Candidate = searchFixedCoreStrongStandardAlphaGain({
             originalImageData,
             baseCandidate: initialCanonical96Candidate,
             alphaGainCandidates
         });
+        observeCandidates(fixedCoreCanonical96Candidate);
         if (shouldPreserveStrongCanonical96AgainstWeakCurrentLargeMargin(fixedCoreCanonical96Candidate, baseCandidate)) {
             baseCandidate = fixedCoreCanonical96Candidate;
             baseDecisionTier = 'direct-match';
@@ -3049,6 +3385,7 @@ export function selectInitialCandidate({
             baseCandidate,
             alphaGainCandidates
         });
+        observeCandidates(fixedCoreStrongAlphaGainCandidate);
         if (fixedCoreStrongAlphaGainCandidate) {
             baseCandidate = fixedCoreStrongAlphaGainCandidate;
             baseDecisionTier = 'direct-match';
@@ -3058,6 +3395,7 @@ export function selectInitialCandidate({
                 standardTrials,
                 alphaGainCandidates
             });
+            observeCandidates(bestEffortCandidate);
             if (bestEffortCandidate) {
                 baseCandidate = bestEffortCandidate;
                 baseDecisionTier = 'direct-match';
@@ -3068,6 +3406,7 @@ export function selectInitialCandidate({
                     resolveAlphaMap,
                     alphaGainCandidates
                 });
+                observeCandidates(fixedCoreLocalGeometryCandidate);
                 baseCandidate = fixedCoreLocalGeometryCandidate;
                 baseDecisionTier = fixedCoreLocalGeometryCandidate ? 'direct-match' : 'insufficient';
             }
@@ -3093,6 +3432,7 @@ export function selectInitialCandidate({
                     ...aggressiveLocatedCandidate,
                     source: `${aggressiveLocatedCandidate.source}+aggressive-located`
                 };
+                observeCandidates(baseCandidate);
                 baseDecisionTier = 'direct-match';
             } else {
             const fixedCoreLocalGeometryCandidate = !allowAutomaticSearch
@@ -3104,11 +3444,13 @@ export function selectInitialCandidate({
                 })
                 : null;
             if (fixedCoreLocalGeometryCandidate) {
+                observeCandidates(fixedCoreLocalGeometryCandidate);
                 baseCandidate = fixedCoreLocalGeometryCandidate;
                 baseDecisionTier = 'direct-match';
             } else {
                 return {
                     selectedTrial: null,
+                    candidatePool,
                     source: 'skipped',
                     alphaMap: fallbackAlphaMap,
                     position,
@@ -3127,6 +3469,7 @@ export function selectInitialCandidate({
                 ...validatedCandidate,
                 source: `${validatedCandidate.source}+validated`
             };
+            observeCandidates(baseCandidate);
             baseDecisionTier = 'validated-match';
         }
     }
@@ -3150,6 +3493,7 @@ export function selectInitialCandidate({
                 includeImageData: false
             })
             : null;
+        observeCandidates(initialCanonical96Seed);
         const rawCanonical96Seed =
             standardTrials.find((candidate) => isCanonicalDefault96Candidate(candidate)) ??
             (isCanonicalDefault96Candidate(standardTrial) ? standardTrial : null) ??
@@ -3170,6 +3514,7 @@ export function selectInitialCandidate({
                 baseCandidate: canonical96Seed,
                 alphaGainCandidates
             });
+        observeCandidates(strictCanonical96Candidate);
         if (shouldPreserveStrongCanonical96AgainstWeakCurrentLargeMargin(strictCanonical96Candidate, baseCandidate)) {
             baseCandidate = strictCanonical96Candidate;
             baseDecisionTier = 'direct-match';
@@ -3194,8 +3539,12 @@ export function selectInitialCandidate({
         allowTemplateWarp: allowAutomaticSearch
     });
 
+    const materializedSelectedTrial = ensureCandidateImageData(selectedTrial, originalImageData);
+    observeCandidates(materializedSelectedTrial);
+
     return {
-        selectedTrial: ensureCandidateImageData(selectedTrial, originalImageData),
+        selectedTrial: materializedSelectedTrial,
+        candidatePool,
         source,
         alphaMap,
         position: refinedPosition,
