@@ -319,11 +319,11 @@ Expected: `clean=19`、干净恢复 `15/16`、`catastrophicBlocks=0`、retry 推
 分别运行：
 
 ```powershell
-node .artifacts/expanded-sample-validation/run-expanded-image-validation.mjs --source D:/Project/sample-files/gemini-watermark/2026-07-15 --all-images --shard-count 2 --sample-order path --no-resume --shard-index 0 --out-dir .artifacts/expanded-sample-validation/curated-top-n/shard-0
+node .artifacts/expanded-sample-validation/run-expanded-image-validation.mjs --source "$env:GWR_SAMPLE_ROOT/RemoveGeminiWatermark/2026-07-15" --all-images --shard-count 2 --sample-order path --no-resume --shard-index 0 --out-dir .artifacts/expanded-sample-validation/curated-top-n/shard-0
 ```
 
 ```powershell
-node .artifacts/expanded-sample-validation/run-expanded-image-validation.mjs --source D:/Project/sample-files/gemini-watermark/2026-07-15 --all-images --shard-count 2 --sample-order path --no-resume --shard-index 1 --out-dir .artifacts/expanded-sample-validation/curated-top-n/shard-1
+node .artifacts/expanded-sample-validation/run-expanded-image-validation.mjs --source "$env:GWR_SAMPLE_ROOT/RemoveGeminiWatermark/2026-07-15" --all-images --shard-count 2 --sample-order path --no-resume --shard-index 1 --out-dir .artifacts/expanded-sample-validation/curated-top-n/shard-1
 ```
 
 然后汇总：
