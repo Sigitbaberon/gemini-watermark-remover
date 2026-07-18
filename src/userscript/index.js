@@ -206,9 +206,11 @@ export async function initGeminiWatermarkRemoverUserscript() {
       });
     };
     const handleProcessedBlobResolved = (payload = {}) => {
+      const resolvedActionContext = resolveCompatibleActionContextFromPayload(payload);
+      const isClipboardResult = resolvedActionContext?.action === 'clipboard';
       storeProcessedBlobResolved(payload, {
-        slot: 'full',
-        processedFrom: 'original-download'
+        slot: isClipboardResult ? 'preview' : 'full',
+        processedFrom: isClipboardResult ? 'original-clipboard' : 'original-download'
       });
     };
     const handleClipboardFallbackBlobResolved = (payload = {}) => {

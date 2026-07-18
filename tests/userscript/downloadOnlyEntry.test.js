@@ -116,7 +116,7 @@ test('userscript entry should store request-layer preview results in the preview
   assert.match(normalized, /imageSessionStore\.updateSourceSnapshot\?\.\(sessionKey,\s*\{/);
 });
 
-test('userscript entry should keep clipboard fallback blobs out of the full session slot', () => {
+test('userscript entry should keep every clipboard result out of the full session slot', () => {
   const source = loadModuleSource('../../src/userscript/index.js', import.meta.url);
   const normalized = normalizeWhitespace(source);
   const downloadHookCall = normalizeWhitespace(getCallSource(source, 'installGeminiDownloadHook'));
@@ -124,7 +124,7 @@ test('userscript entry should keep clipboard fallback blobs out of the full sess
 
   assert.match(
     normalized,
-    /const handleProcessedBlobResolved = \(payload = \{\}\) => \{ storeProcessedBlobResolved\(payload,\s*\{ slot:\s*'full', processedFrom:\s*'original-download' \}\); \}/
+    /const handleProcessedBlobResolved = \(payload = \{\}\) => \{ const resolvedActionContext = resolveCompatibleActionContextFromPayload\(payload\); const isClipboardResult = resolvedActionContext\?\.action === 'clipboard'; storeProcessedBlobResolved\(payload,\s*\{ slot:\s*isClipboardResult \? 'preview' : 'full', processedFrom:\s*isClipboardResult \? 'original-clipboard' : 'original-download' \}\); \}/
   );
   assert.match(
     normalized,
