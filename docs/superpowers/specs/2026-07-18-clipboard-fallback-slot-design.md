@@ -7,13 +7,18 @@ On the real Gemini page, `复制图片` and `下载完整尺寸的图片` can ru
 - Gemini writes a processed `image/png` clipboard payload at `1408x768`;
 - the native full-size download chain (`c8o8Fe` followed by `rd-gg`) produces `2816x1536`.
 
-The clipboard hook correctly processes the clipboard payload when no reusable processed resource is available. However, both the clipboard hook and the download hook currently report their resolved blobs to the same `handleProcessedBlobResolved` callback in `src/userscript/index.js`. That callback always stores the result in the session's `full` slot.
+Clipboard-action results reach the session store through two producers:
 
-After a copy action, the `1408x768` clipboard fallback therefore occupies the `full` slot. A later download action sees that processed resource as reusable, skips Gemini's native full-size request chain, and returns the cached `1408x768` blob instead of the real `2816x1536` image.
+- the clipboard hook reports a blob after processing Gemini's clipboard payload fallback;
+- the request-layer download hook can process an `rd-gg` response while the active intent is `clipboard` and reports that blob with `actionContext.action === 'clipboard'`.
+
+Both paths originally reached a callback that stored the result in the session's `full` slot.
+
+After a copy action, a `1408x768` clipboard result can therefore occupy the `full` slot. A later download action sees that processed resource as reusable, skips the physical full-size `rd-gg` request, and returns the cached `1408x768` blob instead of the real `2816x1536` image. Real-page acceptance confirmed that separating only the clipboard-hook fallback callback is insufficient because the request-layer clipboard path can independently repopulate the full slot.
 
 ## Goal
 
-Keep a clipboard fallback result available for preview-quality reuse without allowing it to masquerade as a full-size download resource.
+Keep every clipboard-action result available for preview-quality reuse without allowing it to masquerade as a full-size download resource.
 
 ## Non-Goals
 
@@ -27,9 +32,9 @@ Keep a clipboard fallback result available for preview-quality reuse without all
 
 ## Considered Approaches
 
-### 1. Store clipboard fallback results in the preview slot
+### 1. Route every clipboard-action result to the preview slot at the entry boundary
 
-Introduce a clipboard-specific resolved-blob callback in `src/userscript/index.js`. It stores the fallback result with `slot: 'preview'` and `processedFrom: 'clipboard-fallback'`. Keep the existing callback for download results so they continue to populate `slot: 'full'`.
+Introduce a clipboard-specific fallback callback in `src/userscript/index.js`, storing with `slot: 'preview'` and `processedFrom: 'clipboard-fallback'`. Make the request-layer resolved callback action-aware: clipboard intent stores `slot: 'preview'` with `processedFrom: 'original-clipboard'`, while download intent stores `slot: 'full'` with `processedFrom: 'original-download'`.
 
 This is the selected approach because the producer knows the resource provenance, the session store already models preview and full quality separately, and no consumer needs special-case rejection logic.
 
@@ -45,16 +50,18 @@ Compare the clipboard blob dimensions with known catalog sizes or another sessio
 
 `src/userscript/index.js` will expose two internal callback responsibilities:
 
-1. The existing download resolved-blob callback continues to call `storeProcessedBlobResolved` with `slot: 'full'` and download provenance.
-2. A new clipboard fallback resolved-blob callback calls `storeProcessedBlobResolved` with:
+1. The request-layer resolved-blob callback resolves `actionContext` from its payload.
+2. When that action is `clipboard`, it stores the result with `slot: 'preview'` and `processedFrom: 'original-clipboard'`.
+3. For download or non-clipboard actions, it stores the result with `slot: 'full'` and `processedFrom: 'original-download'`.
+4. `installGeminiDownloadHook` remains wired to this action-aware request-layer callback.
+5. A new clipboard fallback resolved-blob callback calls `storeProcessedBlobResolved` with:
    - `slot: 'preview'`;
    - `processedFrom: 'clipboard-fallback'`.
-3. `installGeminiDownloadHook` remains wired to the full-resource callback.
-4. `installGeminiClipboardImageHook` is rewired to the clipboard fallback callback.
+6. `installGeminiClipboardImageHook` is wired to the clipboard fallback callback.
 
 No clipboard-hook API change is needed. Its `onProcessedBlobResolved` notification occurs only when fallback processing has produced a clipboard blob. Existing paths that reuse an already-known full resource do not need to store that resource again.
 
-The session store's normal full-quality selection remains unchanged. Because the clipboard fallback no longer occupies or overwrites the full slot, a later download cannot reuse it as a full processed resource and must continue into Gemini's native request flow. If the session already contains a genuine full resource, recording a later clipboard fallback in the preview slot leaves that full resource intact.
+The session store's normal full-quality selection remains unchanged. Because neither clipboard producer occupies or overwrites the full slot, a later download cannot reuse a clipboard result as a full processed resource and must continue into Gemini's native request flow. If the session already contains a genuine full resource, recording a later clipboard result in the preview slot leaves that full resource intact.
 
 ## Data Flow
 
@@ -87,10 +94,11 @@ This change introduces no new errors or user-facing messages. Existing behavior 
 
 Add focused wiring coverage in `tests/userscript/downloadOnlyEntry.test.js` that verifies:
 
-- the download hook receives the existing full-resource callback;
+- the request-layer callback resolves the payload action and stores clipboard results in `preview/original-clipboard`;
+- the same callback stores download results in `full/original-download`;
+- the download hook receives this action-aware callback;
 - the clipboard hook receives a distinct clipboard-fallback callback;
 - the clipboard callback stores its payload in `slot: 'preview'` with `processedFrom: 'clipboard-fallback'`;
-- the download callback still stores download output in `slot: 'full'`.
 
 The test must fail before implementation because both hooks currently share the full-slot callback. Keep clipboard-hook behavior tests unchanged except for correcting any test description that inaccurately calls its fallback payload full-size.
 
@@ -110,7 +118,7 @@ The test must fail before implementation because both hooks currently share the 
 
 ## Acceptance Criteria
 
-- Copying an image does not populate or overwrite the session full slot with the clipboard fallback.
+- Copying an image does not populate or overwrite the session full slot through either the fallback hook or request-layer processing.
 - Copy remains successful with Gemini's current `1408x768` PNG payload.
 - A subsequent full-size download in the same session produces `2816x1536`, not `1408x768`.
 - The native download request chain remains passive and unblocked.
