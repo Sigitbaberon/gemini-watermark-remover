@@ -16,6 +16,7 @@ test('package.json should expose the expected local script entrypoints', () => {
     'probe:tm:freshness': 'node scripts/tampermonkey-freshness.js',
     'probe:tm:profile': 'node scripts/open-tampermonkey-profile.js',
     'probe:real-page:compare': 'node scripts/real-page-pixel-compare.js',
+    'probe:real-page:copy-download': 'node scripts/real-page-copy-download-probe.js',
     'benchmark:userscript': 'node scripts/userscript-benchmark.js',
     'compare:allenk-v2': 'node scripts/create-allenk-v2-comparison-report.js',
     'release:image-validation': 'node scripts/run-image-release-validation.js',
