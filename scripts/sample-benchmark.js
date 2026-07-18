@@ -1147,8 +1147,17 @@ async function buildBenchmarkReport({
     const alpha48 = calculateAlphaMap(await decodeImageDataInNode(bg48Path));
     const alpha96 = calculateAlphaMap(await decodeImageDataInNode(bg96Path));
     const alpha96NewMargin = calculateAlphaMap(await decodeImageDataInNode(bg96NewMarginPath));
+    const alpha96OutlineLight = getEmbeddedAlphaMap('96-outline-light');
+    const alpha96OutlineDark = getEmbeddedAlphaMap('96-outline-dark');
+    const alpha96Variants = {
+        '20260520': alpha96NewMargin,
+        'outline-light': alpha96OutlineLight,
+        'outline-dark': alpha96OutlineDark
+    };
     const alphaResolver = (size) => {
         if (size === '36-v2') return getEmbeddedAlphaMap('36-v2');
+        if (size === '96-outline-light') return alpha96OutlineLight;
+        if (size === '96-outline-dark') return alpha96OutlineDark;
         if (size === 48) return alpha48;
         if (size === 96) return alpha96;
         return interpolateAlphaMap(alpha96, 96, size);
@@ -1170,9 +1179,7 @@ async function buildBenchmarkReport({
         const processed = processWatermarkImageData(imageData, {
             alpha48,
             alpha96,
-            alpha96Variants: {
-                '20260520': alpha96NewMargin
-            },
+            alpha96Variants,
             getAlphaMap: alphaResolver
         });
         const rawCandidateRankings = buildCandidateRankingReport({
@@ -1180,9 +1187,7 @@ async function buildBenchmarkReport({
             initialConfig,
             alpha48,
             alpha96,
-            alpha96Variants: {
-                '20260520': alpha96NewMargin
-            },
+            alpha96Variants,
             getAlphaMap: alphaResolver
         });
         const candidateRankings = annotateCandidateRankingReport(rawCandidateRankings, {
@@ -1199,9 +1204,7 @@ async function buildBenchmarkReport({
             initialConfig,
             alpha48,
             alpha96,
-            alpha96Variants: {
-                '20260520': alpha96NewMargin
-            },
+            alpha96Variants,
             getAlphaMap: alphaResolver,
             expectedAnchor: item.gold?.expectedAnchor ?? null,
             expectedAlphaGain: item.gold?.expectedAlphaGain ?? null

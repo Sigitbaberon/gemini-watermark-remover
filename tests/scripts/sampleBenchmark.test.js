@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import sharp from 'sharp';
 
 import {
     buildCandidateRankingReport,
@@ -10,6 +13,7 @@ import {
     decodeImageDataInNode,
     listBenchmarkSampleAssets,
     loadSampleGoldManifest,
+    runSampleBenchmark,
     summarizeCandidateRankingReport,
     summarizeBenchmarkResults
 } from '../../scripts/sample-benchmark.js';
@@ -21,6 +25,35 @@ import {
 } from '../../src/core/watermarkConfig.js';
 import { processWatermarkImageData } from '../../src/core/watermarkProcessor.js';
 import { classifyExternalBenchmarkCase } from '../../scripts/run-external-gemini-watermark-sample-benchmark.js';
+import { createPatternImageData } from '../core/syntheticWatermarkTestUtils.js';
+
+test('runSampleBenchmark should include embedded outline alpha variants', async () => {
+    const sampleDir = await mkdtemp(path.join(tmpdir(), 'gwr-outline-benchmark-'));
+    const fixtureName = 'issue101-outline-dark-landscape.png';
+    const imageData = createPatternImageData(2816, 1536);
+    const crop = await decodeImageDataInNode(path.resolve('tests/fixtures', fixtureName));
+    const cropLeft = 2480;
+    const cropTop = 1152;
+    for (let y = 0; y < crop.height; y++) {
+        for (let x = 0; x < crop.width; x++) {
+            const sourceIndex = (y * crop.width + x) * 4;
+            const targetIndex = ((cropTop + y) * imageData.width + cropLeft + x) * 4;
+            imageData.data.set(crop.data.subarray(sourceIndex, sourceIndex + 4), targetIndex);
+        }
+    }
+    await sharp(Buffer.from(imageData.data.buffer), {
+        raw: { width: imageData.width, height: imageData.height, channels: 4 }
+    }).png().toFile(path.join(sampleDir, fixtureName));
+
+    const report = await runSampleBenchmark({
+        sampleDir,
+        outputPath: path.join(sampleDir, 'report.json')
+    });
+
+    assert.equal(report.results.length, 1);
+    assert.equal(report.results[0].actualAnchor?.alphaVariant, 'outline-dark');
+    assert.match(report.results[0].source, /outline-dark/);
+});
 
 test('classifyBenchmarkCase should mark skipped expected Gemini sample as missed detection', () => {
     const result = classifyBenchmarkCase({
