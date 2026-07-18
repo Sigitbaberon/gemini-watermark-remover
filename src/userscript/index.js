@@ -206,12 +206,15 @@ export async function initGeminiWatermarkRemoverUserscript() {
       });
     };
     const handleProcessedBlobResolved = (payload = {}) => {
-      const resolvedActionContext = resolveCompatibleActionContextFromPayload(payload);
       storeProcessedBlobResolved(payload, {
         slot: 'full',
-        processedFrom: resolvedActionContext?.action === 'clipboard'
-          ? 'original-clipboard'
-          : 'original-download'
+        processedFrom: 'original-download'
+      });
+    };
+    const handleClipboardFallbackBlobResolved = (payload = {}) => {
+      storeProcessedBlobResolved(payload, {
+        slot: 'preview',
+        processedFrom: 'clipboard-fallback'
       });
     };
     const downloadIntentGate = createGeminiDownloadIntentGate({
@@ -270,7 +273,7 @@ export async function initGeminiWatermarkRemoverUserscript() {
     const disposeClipboardHook = installGeminiClipboardImageHook(targetWindow, {
       getActionContext: () => downloadIntentGate.getRecentActionContext(),
       imageSessionStore: imageSessionStore,
-      onProcessedBlobResolved: handleProcessedBlobResolved,
+      onProcessedBlobResolved: handleClipboardFallbackBlobResolved,
       onActionCriticalFailure: handleActionCriticalFailure,
       processClipboardImageBlob: (blob, { actionContext } = {}) => (
         processClipboardImageBlobAtBestPath(blob, { actionContext })

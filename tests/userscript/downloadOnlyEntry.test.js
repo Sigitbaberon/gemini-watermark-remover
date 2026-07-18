@@ -116,6 +116,24 @@ test('userscript entry should store request-layer preview results in the preview
   assert.match(normalized, /imageSessionStore\.updateSourceSnapshot\?\.\(sessionKey,\s*\{/);
 });
 
+test('userscript entry should keep clipboard fallback blobs out of the full session slot', () => {
+  const source = loadModuleSource('../../src/userscript/index.js', import.meta.url);
+  const normalized = normalizeWhitespace(source);
+  const downloadHookCall = normalizeWhitespace(getCallSource(source, 'installGeminiDownloadHook'));
+  const clipboardHookCall = normalizeWhitespace(getCallSource(source, 'installGeminiClipboardImageHook'));
+
+  assert.match(
+    normalized,
+    /const handleProcessedBlobResolved = \(payload = \{\}\) => \{ storeProcessedBlobResolved\(payload,\s*\{ slot:\s*'full', processedFrom:\s*'original-download' \}\); \}/
+  );
+  assert.match(
+    normalized,
+    /const handleClipboardFallbackBlobResolved = \(payload = \{\}\) => \{ storeProcessedBlobResolved\(payload,\s*\{ slot:\s*'preview', processedFrom:\s*'clipboard-fallback' \}\); \}/
+  );
+  assert.match(downloadHookCall, /onProcessedBlobResolved:\s*handleProcessedBlobResolved/);
+  assert.match(clipboardHookCall, /onProcessedBlobResolved:\s*handleClipboardFallbackBlobResolved/);
+});
+
 test('userscript entry should preserve the intent target for fullscreen clipboard fallback resolution', () => {
   const source = loadModuleSource('../../src/userscript/index.js', import.meta.url);
   const intentGateCall = normalizeWhitespace(getCallSource(source, 'createGeminiDownloadIntentGate'));

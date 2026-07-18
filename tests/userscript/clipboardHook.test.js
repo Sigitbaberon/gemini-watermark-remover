@@ -489,7 +489,7 @@ test('installGeminiClipboardImageHook should process the clipboard image payload
   dispose();
 });
 
-test('installGeminiClipboardImageHook should notify when fallback processing produces a full clipboard blob', async () => {
+test('installGeminiClipboardImageHook should notify when fallback processing produces a processed clipboard payload blob', async () => {
   const writtenItems = [];
   const originalClipboardBlob = new Blob(['clipboard-original-cache'], { type: 'image/png' });
   const processedClipboardBlob = new Blob(['clipboard-processed-cache'], { type: 'image/png' });
